@@ -1,0 +1,14 @@
+[Extension]
+Name=Faces
+Description=Detect and tag faces in photos.
+Authors=Phil Ashby
+Copyright=Copyright © Phil Ashby & (Ashbysoft *)
+Version=3.4.4.1
+URL=https://ashbysoft.com/wiki/Face%20Recognition
+Icon=file-catalog
+Category=Viewer
+
+[Loader]
+Type=module
+File=libfaces.so
+API=3.4
