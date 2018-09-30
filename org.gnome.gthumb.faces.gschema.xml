@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  
+  <schema path="/org/gnome/gthumb/faces/" id="org.gnome.gthumb.faces">
+    <key type="s" name="dbpath">
+            <default>'/home/shared/photos/faces.db'</default>
+    </key>
+  </schema>
+  
+</schemalist>

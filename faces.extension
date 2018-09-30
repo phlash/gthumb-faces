@@ -1,6 +1,6 @@
 [Extension]
 Name=Faces
-Description=Detect and tag faces in photos.
+Description=Display faces in photos.
 Authors=Phil Ashby
 Copyright=Copyright © Phil Ashby & (Ashbysoft *)
 Version=3.4.4.1
