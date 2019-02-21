@@ -98,7 +98,7 @@ static GthImage * loader_intercept (
     sqlite3_stmt *stmt = NULL;
     _dbg("faces: querying for faces in file: %s\n", path);
     int rv = sqlite3_prepare_v2(db,
-        "SELECT DISTINCT d.left, d.top, d.right, d.bottom, g.label, g.grp from file_paths f inner join face_data as d on d.hash = f.hash inner join face_groups as g on g.grp = d.grp where f.path = ?1",
+        "SELECT DISTINCT d.left, d.top, d.right, d.bottom, g.label, g.grp, d.inpic from file_paths f inner join face_data as d on d.hash = f.hash inner join face_groups as g on g.grp = d.grp where f.path = ?1",
         -1 , &stmt, NULL);
     if (SQLITE_OK != rv)
         fprintf(stderr, "faces: sqlite_prepare error: %d\n", rv);
@@ -107,7 +107,7 @@ static GthImage * loader_intercept (
         fprintf(stderr, "faces: sqlite_bind error: %d\n", rv);
     while ((rv = sqlite3_step(stmt)) != SQLITE_DONE)
     {
-        int l, t, r, b;
+        int l, t, r, b, p;
         const char *n, *g;
         if (SQLITE_ROW != rv) {
             fprintf(stderr, "faces: sqlite_step error: %d\n", rv);
@@ -119,6 +119,7 @@ static GthImage * loader_intercept (
         b = sqlite3_column_int(stmt, 3);
         n = sqlite3_column_text(stmt, 4);
         g = sqlite3_column_text(stmt, 5);
+        p = sqlite3_column_int(stmt, 6);
 	    // Tag faces with a named rectangle =)
 	    cairo_surface_t *cs = gth_image_get_cairo_surface(image);
         if (!cs) {
@@ -134,7 +135,10 @@ static GthImage * loader_intercept (
             double sw = ((double)w)/((double)(*original_width_p));
             double sh = ((double)h)/((double)(*original_height_p));
             cairo_scale(cr, sw, sh);
-	        cairo_set_source_rgb(cr, 1.0, 0, 0);
+            if (p>0)
+	            cairo_set_source_rgb(cr, 0, 1.0, 0);
+            else
+	            cairo_set_source_rgb(cr, 1.0, 0, 0);
 	        cairo_rectangle(cr, l, t, r-l, b-t);
             cairo_move_to(cr, l+5, b-5);
             cairo_set_font_size(cr, 20/sw);
