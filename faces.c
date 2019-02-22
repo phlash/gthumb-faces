@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 4; indent-tabs-mode: t; c-basic-offset: 4 -*- */
+/* -*- Mode: C; tab-width: 4; expand-tabs; indent-tabs-mode: t; c-basic-offset: 4 -*- */
 
 /*
  *  GThumb
@@ -120,8 +120,8 @@ static GthImage * loader_intercept (
         n = sqlite3_column_text(stmt, 4);
         g = sqlite3_column_text(stmt, 5);
         p = sqlite3_column_int(stmt, 6);
-	    // Tag faces with a named rectangle =)
-	    cairo_surface_t *cs = gth_image_get_cairo_surface(image);
+        // Tag faces with a named rectangle =)
+        cairo_surface_t *cs = gth_image_get_cairo_surface(image);
         if (!cs) {
             fprintf(stderr, "faces: unable to get cairo surface: %s\n", path);
             continue;
@@ -130,26 +130,28 @@ static GthImage * loader_intercept (
         w = cairo_image_surface_get_width(cs);
         h = cairo_image_surface_get_height(cs);
         _dbg("\t%s(%s)@%d,%d,%d,%d original %dx%d, this %dx%d\n", n, g, l, t, r, b, *original_width_p, *original_height_p, w, h);
-	    cairo_t *cr = cairo_create(cs);
-	    if (cr) {
+        cairo_t *cr = cairo_create(cs);
+        if (cr) {
             double sw = ((double)w)/((double)(*original_width_p));
             double sh = ((double)h)/((double)(*original_height_p));
             cairo_scale(cr, sw, sh);
             if (p>0)
-	            cairo_set_source_rgb(cr, 0, 1.0, 0);
+                cairo_set_source_rgb(cr, 0, 1.0, 0);
             else
-	            cairo_set_source_rgb(cr, 1.0, 0, 0);
-	        cairo_rectangle(cr, l, t, r-l, b-t);
+                cairo_set_source_rgb(cr, 1.0, 0, 0);
+            cairo_rectangle(cr, l, t, r-l, b-t);
             cairo_move_to(cr, l+5, b-5);
             cairo_set_font_size(cr, 20/sw);
             cairo_text_path(cr, n);
+            cairo_text_path(cr, " (");
             cairo_text_path(cr, g);
-	        cairo_stroke(cr);
-	        cairo_destroy(cr);
-	    } else {
+            cairo_text_path(cr, ")");
+            cairo_stroke(cr);
+            cairo_destroy(cr);
+        } else {
             fprintf(stderr, "faces: unable to create cairo context: %s\n", path);
         }
-	    cairo_surface_destroy(cs);
+        cairo_surface_destroy(cs);
     }
     sqlite3_finalize(stmt);
     _dbg("faces: done\n");
@@ -557,7 +559,7 @@ gthumb_extension_deactivate (void) {
 
 G_MODULE_EXPORT gboolean
 gthumb_extension_is_configurable (void) {
-	return TRUE;
+    return TRUE;
 }
 
 
