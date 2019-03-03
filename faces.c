@@ -255,7 +255,6 @@ static GFile *faces_file_source_to_gio_file(GthFileSource *fs, GFile *file) {
 static void faces_file_source_update_file_info(GthFileSource *fs, GFile *file, GFileInfo *info) {
     char *uri = g_file_get_uri(file);
     int n_face = is_face_uri(uri);
-    _dbg("faces: file_source(%d): update_file_info (%s=%d)\n", ((FacesFileSource*)fs)->id, uri, n_face);
     g_file_info_set_file_type(info, G_FILE_TYPE_DIRECTORY);
     g_file_info_set_content_type(info, "gthumb/face");
     //g_file_info_set_sort_order(info, n_face);
@@ -290,6 +289,10 @@ static void faces_file_source_update_file_info(GthFileSource *fs, GFile *file, G
     GIcon *icon = g_themed_icon_new("tag-symbolic");
     g_file_info_set_symbolic_icon(info, icon);
     g_object_unref(icon);
+    _dbg("faces: file_source(%d): update_file_info (%s=%d) name=%s display=%s\n",
+        ((FacesFileSource*)fs)->id, uri, n_face,
+        g_file_info_get_name(info),
+        g_file_info_get_display_name(info));
     g_free(uri);
 }
 static GFileInfo *faces_file_source_get_file_info(GthFileSource *fs, GFile *file, const char *attrs) {
@@ -349,19 +352,17 @@ static void faces_file_source_iterate_faces(gpointer user) {
                 fprintf(stderr, "sqlite3 failed to read label row: %s\n", rv);
                 goto done;
             }
-            const char *label = sqlite3_column_text(stmt, 0);
+            char *label = g_uri_escape_string(sqlite3_column_text(stmt, 0), "", FALSE);
             char *face = g_strdup_printf("face:///%s", label);
+            g_free(label);
             GFile *file = g_file_new_for_uri(face);
-            // Get escaped URI from file object
-            g_free(face);
-            face = g_file_get_uri(file);
             GFileInfo *info = g_file_info_new();
             faces_file_source_update_file_info((GthFileSource*)state->ffs, file, info);
             _dbg("faces: file_source(%d): fec callback for: %s\n", state->ffs->id, face);
             state->fec(file, info, state->user);
             g_object_unref(info);
-            g_free(face);
             g_object_unref(file);
+            g_free(face);
         }
         sqlite3_finalize(stmt);
     }
