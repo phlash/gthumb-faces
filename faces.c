@@ -65,9 +65,93 @@ static void _dbg(const char *fmt, ...)
     }
 }
 
+// face query function, used by both load intercept and render overlay methods
+static void find_faces(char *path, void (*fcb)(int,int,int,int,const char*,const char*,int,gpointer), gpointer user) {
+    sqlite3_stmt *stmt = NULL;
+    _dbg("faces: find_faces: %s\n", path);
+    int rv = sqlite3_prepare_v2(db,
+        "SELECT DISTINCT d.left, d.top, d.right, d.bottom, g.label, g.grp, d.inpic from file_paths f inner join face_data as d on d.hash = f.hash inner join face_groups as g on g.grp = d.grp where f.path = ?1",
+        -1 , &stmt, NULL);
+    if (SQLITE_OK != rv)
+        fprintf(stderr, "faces: sqlite_prepare error: %d\n", rv);
+    rv = sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
+    if (SQLITE_OK != rv)
+        fprintf(stderr, "faces: sqlite_bind error: %d\n", rv);
+    while ((rv = sqlite3_step(stmt)) != SQLITE_DONE) {
+        int l, t, r, b, p;
+        const char *n, *g;
+        if (SQLITE_ROW != rv) {
+            fprintf(stderr, "faces: sqlite_step error: %d\n", rv);
+            break;
+        }
+        l = sqlite3_column_int(stmt, 0);
+        t = sqlite3_column_int(stmt, 1);
+        r = sqlite3_column_int(stmt, 2);
+        b = sqlite3_column_int(stmt, 3);
+        n = sqlite3_column_text(stmt, 4);
+        g = sqlite3_column_text(stmt, 5);
+        p = sqlite3_column_int(stmt, 6);
+        fcb(l,t,r,b,n,g,p,user);
+    }
+    sqlite3_finalize(stmt);
+    _dbg("faces: find_faces: done\n");
+}
+
 // image loader interceptor - overlays face rectangles on GthImage..
 static GthImageLoaderFunc prev_jpeg = NULL;
 static GthImageLoaderFunc prev_png = NULL;
+static void draw_to_context(cairo_t *cr, int l, int t, int r, int b, const char *n, const char *g, int p) {
+    cairo_save(cr);
+    if (p>0)
+        cairo_set_source_rgb(cr, 0, 1.0, 0);
+    else
+        cairo_set_source_rgb(cr, 1.0, 0, 0);
+    cairo_set_line_width(cr, 2.0);
+    cairo_rectangle(cr, l, t, r-l, b-t);
+    cairo_move_to(cr, l, b+15);
+    cairo_set_font_size(cr, 12);
+    cairo_set_line_width(cr, 1.0);
+    cairo_text_path(cr, n);
+    cairo_text_path(cr, " (");
+    cairo_text_path(cr, g);
+    cairo_text_path(cr, ")");
+    cairo_stroke(cr);
+    cairo_restore(cr);
+    _dbg("\tfaces: draw: %s(%s)@%d,%d,%d,%d\n", n, g, l, t, r, b);
+}
+typedef struct {
+    GthImage *image;
+    int w, h;
+} InterceptData;
+static void draw_to_image(int l, int t, int r, int b, const char *n, const char *g, int p, gpointer user) {
+    // Tag faces with a named rectangle =)
+    InterceptData *data = (InterceptData *)user;
+    cairo_surface_t *cs = gth_image_get_cairo_surface(data->image);
+    if (!cs) {
+        fprintf(stderr, "faces: unable to get cairo surface\n");
+        return;
+    }
+    int w, h;
+    w = cairo_image_surface_get_width(cs);
+    h = cairo_image_surface_get_height(cs);
+    cairo_t *cr = cairo_create(cs);
+    if (cr) {
+        double sw = ((double)w)/((double)data->w);
+        double sh = ((double)h)/((double)data->h);
+        // we calculate as follows:
+        //     rect (l,r) = face(l,r) * sw
+        //     rect (t,b) = face(t,b) * sh
+        l = (int)(((double)l)*sw);
+        r = (int)(((double)r)*sw);
+        t = (int)(((double)t)*sh);
+        b = (int)(((double)b)*sh);
+        draw_to_context(cr, l, t, r, b, n, g, p);
+        cairo_destroy(cr);
+    } else {
+        fprintf(stderr, "faces: unable to create cairo context\n");
+    }
+    cairo_surface_destroy(cs);
+}
 static GthImage * loader_intercept (
                 GInputStream  *istream,
                 GthFileData   *file_data,
@@ -94,69 +178,12 @@ static GthImage * loader_intercept (
         fputs("faces: non-local image URI\n", stderr);
         return image;
     }
-
-    sqlite3_stmt *stmt = NULL;
-    _dbg("faces: querying for faces in file: %s\n", path);
-    int rv = sqlite3_prepare_v2(db,
-        "SELECT DISTINCT d.left, d.top, d.right, d.bottom, g.label, g.grp, d.inpic from file_paths f inner join face_data as d on d.hash = f.hash inner join face_groups as g on g.grp = d.grp where f.path = ?1",
-        -1 , &stmt, NULL);
-    if (SQLITE_OK != rv)
-        fprintf(stderr, "faces: sqlite_prepare error: %d\n", rv);
-    rv = sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
-    if (SQLITE_OK != rv)
-        fprintf(stderr, "faces: sqlite_bind error: %d\n", rv);
-    while ((rv = sqlite3_step(stmt)) != SQLITE_DONE)
-    {
-        int l, t, r, b, p;
-        const char *n, *g;
-        if (SQLITE_ROW != rv) {
-            fprintf(stderr, "faces: sqlite_step error: %d\n", rv);
-            break;
-        }
-        l = sqlite3_column_int(stmt, 0);
-        t = sqlite3_column_int(stmt, 1);
-        r = sqlite3_column_int(stmt, 2);
-        b = sqlite3_column_int(stmt, 3);
-        n = sqlite3_column_text(stmt, 4);
-        g = sqlite3_column_text(stmt, 5);
-        p = sqlite3_column_int(stmt, 6);
-        // Tag faces with a named rectangle =)
-        cairo_surface_t *cs = gth_image_get_cairo_surface(image);
-        if (!cs) {
-            fprintf(stderr, "faces: unable to get cairo surface: %s\n", path);
-            continue;
-        }
-        int w, h;
-        w = cairo_image_surface_get_width(cs);
-        h = cairo_image_surface_get_height(cs);
-        _dbg("\t%s(%s)@%d,%d,%d,%d original %dx%d, this %dx%d\n", n, g, l, t, r, b, *original_width_p, *original_height_p, w, h);
-        cairo_t *cr = cairo_create(cs);
-        if (cr) {
-            double sw = ((double)w)/((double)(*original_width_p));
-            double sh = ((double)h)/((double)(*original_height_p));
-            cairo_scale(cr, sw, sh);
-            if (p>0)
-                cairo_set_source_rgb(cr, 0, 1.0, 0);
-            else
-                cairo_set_source_rgb(cr, 1.0, 0, 0);
-            cairo_rectangle(cr, l, t, r-l, b-t);
-            cairo_move_to(cr, l+5, b-5);
-            cairo_set_font_size(cr, 20/sw);
-            cairo_text_path(cr, n);
-            cairo_text_path(cr, " (");
-            cairo_text_path(cr, g);
-            cairo_text_path(cr, ")");
-            cairo_stroke(cr);
-            cairo_destroy(cr);
-        } else {
-            fprintf(stderr, "faces: unable to create cairo context: %s\n", path);
-        }
-        cairo_surface_destroy(cs);
-    }
-    sqlite3_finalize(stmt);
-    _dbg("faces: done\n");
+    InterceptData data = { image, *original_width_p, *original_height_p };
+    find_faces(path, draw_to_image, &data);
+    g_free(path);
     return image;
 }
+
 static GthImage * jpeg_intercept (
                 GInputStream  *istream,
                 GthFileData   *file_data,
@@ -519,21 +546,129 @@ static GType faces_file_source_get_type(void) {
     return type;
 }
 
+
+// ** Hook into GthImageViewer rendering chain to add markers to images
+
+// Here we declare a function in /another extension/, as it's the ONLY way to
+// get hold of the GthImageViewer instance in use (apparantly - sigh).
+// NB: We would include the extension's own header.. but it's not in the gThumb
+// plug-in dev kit (as you would expect, it's a private plug in), so we hack
+// it here. Wouldn't it be nice if this sort of coupling could be avoided by some
+// sort of introspection type system, or hook registry.. oh wait :-/
+extern GtkWidget * gth_image_viewer_page_get_image_viewer (GthViewerPage *self);
+
+// Shared cache of facial data for a specific image
+typedef struct _FaceInfo {
+    struct _FaceInfo *next;
+    int l, t, r, b, p;
+    gchar *n, *g;
+} FaceInfo;
+typedef struct {
+    gchar *path;
+    FaceInfo *faces;
+} FaceCache;
+// callback from find_faces
+static void cache_face(int l, int t, int r, int b, const char *n, const char *g, int p, gpointer user) {
+    FaceCache *cache = (FaceCache *)user;
+    FaceInfo *fi = malloc(sizeof(FaceInfo));
+    fi->next = cache->faces;
+    fi->l = l;
+    fi->t = t;
+    fi->r = r;
+    fi->b = b;
+    fi->p = p;
+    fi->n = g_strdup(n);
+    fi->g = g_strdup(g);
+    cache->faces = fi;
+    _dbg("faces: cache_face: %s\n", n);
+}
+// GLib signal handler, called when any viewer loads a file
+// We use this as a conveniant moment to query for image metadata
+static void faces_viewer_file_loaded(GthViewerPage *viewer, GthFileData *file, gboolean success, gpointer user) {
+    gchar *path = g_file_get_path(file->file);
+    FaceCache *cache = (FaceCache *)user;
+    _dbg("faces: viewer_file_loaded(%s): %s\n", success ? "ok" : "fail", path);
+    if (success) {
+        if (NULL != cache->path)
+            g_free(cache->path);
+        cache->path = g_strdup(path);
+        if (NULL != cache->faces) {
+            FaceInfo *fi, *n;
+            for (fi = cache->faces; fi != NULL; fi = n) {
+                if (fi->n != NULL)
+                    g_free(fi->n);
+                if (fi->g != NULL)
+                    g_free(fi->g);
+                n = fi->next;
+                free(fi);
+            }
+            cache->faces = NULL;
+        }
+        find_faces(cache->path, cache_face, cache);
+    }
+    g_free(path);
+}
+
+// Scale and draw face metadata from the cache over the image
+static void faces_paint_metadata(GthImageViewer *viewer, cairo_t *cr, gpointer user) {
+    FaceCache *cache = (FaceCache *)user;
+    double z = gth_image_viewer_get_zoom(viewer);
+    int orig_w, orig_h;
+    gth_image_viewer_get_original_size(viewer, &orig_w, &orig_h);
+    // We create a fresh context, as the provided one is oddly transformed
+    cairo_t *ourcr = cairo_create(cairo_get_target(cr));
+    // We calculate as follows:
+    //   image (left,top) = transform(cr, (image_offset) - (scroll_offset))
+    //   rect (l,t,r,b) = (face (l,t,r,b) * z) + image (left,top)
+    double il = (double)(viewer->image_area.x - viewer->visible_area.x);
+    double it = (double)(viewer->image_area.y - viewer->visible_area.y);
+    cairo_user_to_device(cr, &il, &it);
+    FaceInfo *fi;
+    for (fi = cache->faces; fi != NULL; fi = fi->next) {
+        int l = (int)(((double)fi->l)*z + il);
+        int t = (int)(((double)fi->t)*z + it);
+        int r = (int)(((double)fi->r)*z + il);
+        int b = (int)(((double)fi->b)*z + it);
+        draw_to_context(ourcr, l, t, r, b, fi->n, fi->g, fi->p);
+    }
+    cairo_destroy(ourcr);
+}
+
+static void faces_viewer_activated(GthBrowser *browser) {
+    GthViewerPage *page = GTH_VIEWER_PAGE(gth_browser_get_viewer_page(browser));
+    GType vtype = G_OBJECT_TYPE(page);
+    // Check we can use the method in the extension to get to the GthImageViewer..
+    // If so: then connect to the file loaded signal for this page and add a paint
+    // handler to the GthImageViewer, both sharing a cache of face data.
+    if (strcmp(g_type_name(vtype), "GthImageViewerPage") == 0) {
+        FaceCache *cache = calloc(1, sizeof(FaceCache));
+        g_signal_connect(page, "file-loaded", G_CALLBACK(faces_viewer_file_loaded), cache);
+        GtkWidget *viewer = gth_image_viewer_page_get_image_viewer(page);
+        gth_image_viewer_add_painter(GTH_IMAGE_VIEWER(viewer), faces_paint_metadata, cache);
+        _dbg("faces: viewer_activated: hooked page type: %s cache=%p\n", g_type_name(vtype), cache);
+    }
+}
+
 G_MODULE_EXPORT void
 gthumb_extension_activate (void) {
-    // Intercept image loaders
-    char *mime_jpeg = "image/jpeg";
-    char *mime_png = "image/png";
-    prev_jpeg = gth_main_get_image_loader_func(mime_jpeg, GTH_IMAGE_FORMAT_CAIRO_SURFACE);
-    if (prev_jpeg)
-        gth_main_register_image_loader_func(jpeg_intercept, GTH_IMAGE_FORMAT_CAIRO_SURFACE, mime_jpeg, NULL);
-    else
-        fputs("faces: unable to intercept image/jpeg loader\n", stderr);
-    prev_png = gth_main_get_image_loader_func(mime_png, GTH_IMAGE_FORMAT_CAIRO_SURFACE);
-    if (prev_png)
-        gth_main_register_image_loader_func(png_intercept, GTH_IMAGE_FORMAT_CAIRO_SURFACE, mime_png, NULL);
-    else
-        fputs("faces: unable to intercept image/png loader\n", stderr);
+    if (getenv("FACES_INTERCEPT") != NULL) {
+        // Intercept image loaders
+        char *mime_jpeg = "image/jpeg";
+        char *mime_png = "image/png";
+        prev_jpeg = gth_main_get_image_loader_func(mime_jpeg, GTH_IMAGE_FORMAT_CAIRO_SURFACE);
+        if (prev_jpeg)
+            gth_main_register_image_loader_func(jpeg_intercept, GTH_IMAGE_FORMAT_CAIRO_SURFACE, mime_jpeg, NULL);
+        else
+            fputs("faces: unable to intercept image/jpeg loader\n", stderr);
+        prev_png = gth_main_get_image_loader_func(mime_png, GTH_IMAGE_FORMAT_CAIRO_SURFACE);
+        if (prev_png)
+            gth_main_register_image_loader_func(png_intercept, GTH_IMAGE_FORMAT_CAIRO_SURFACE, mime_png, NULL);
+        else
+            fputs("faces: unable to intercept image/png loader\n", stderr);
+    } else {
+        // Hook into processing when browser viewer is activated
+        gth_hook_add_callback("gth-browser-activate-viewer-page", 10, G_CALLBACK(faces_viewer_activated), NULL);
+    }
     // Read our database path and open it
     GSettings *settings = g_settings_new(GTHUMB_FACES_SCHEMA);
     char *dbpath = g_settings_get_string(settings, PREF_FACES_DBPATH);
@@ -541,6 +676,8 @@ gthumb_extension_activate (void) {
     _dbg("faces: org.gnome.gthumb.faces.dbpath=%s\n", dbpath);
     if (!dbpath || !dbpath[0])
         dbpath = dbfile;
+    // save a copy of the path name
+    dbfile = g_strdup(dbpath);
     if (sqlite3_open_v2(dbpath, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
         fprintf(stderr, "faces: unable to open database: %s\n", dbpath);
         db = NULL;
@@ -565,7 +702,23 @@ gthumb_extension_is_configurable (void) {
 
 G_MODULE_EXPORT void
 gthumb_extension_configure (GtkWindow *parent) {
-    GtkWidget *dialog = gtk_message_dialog_new(parent, 0, GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "Hello config!");
+    // Display the current database path and threshold
+    const char *thresh = "unknown";
+    if (db) {
+        sqlite3_stmt *stmt = NULL;
+        int rv = sqlite3_prepare_v2(db, "SELECT key,value from face_scanner_config WHERE key = 'threshold'", -1, &stmt, NULL);
+        if (SQLITE_OK != rv) {
+            fprintf(stderr, "faces: unable to read config: %d\n", rv);
+            return;
+        }
+        while ((rv = sqlite3_step(stmt)) != SQLITE_DONE) {
+            thresh = sqlite3_column_text(stmt, 1);
+        }
+        sqlite3_finalize(stmt);
+    }
+    gchar *msg = g_strdup_printf("Database: %s\nThreshold: %s", dbfile, thresh);
+    GtkWidget *dialog = gtk_message_dialog_new(parent, 0, GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, msg);
     gtk_dialog_run(GTK_DIALOG(dialog));
     gtk_widget_destroy(dialog);
+    g_free(msg);
 }
