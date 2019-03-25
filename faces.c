@@ -365,6 +365,32 @@ static void faces_file_source_iterate_faces(gpointer user) {
             g_free(face);
         }
         sqlite3_finalize(stmt);
+        // special hack.. iterate _unknown_ faces by group id, in descending order of quantity
+        if (getenv("FACES_ITERATE_UNKNOWN") != NULL) {
+            stmt = NULL;
+            rv = sqlite3_prepare_v2(db, "select g.grp, count(g.grp) as count from face_data as d, face_groups as g where d.grp=g.grp and g.label='_unknown_' group by g.grp order by count desc", -1, &stmt, NULL);
+            if (SQLITE_OK != rv) {
+                fprintf(stderr, "sqlite3 failed to select unknown counts: %d\n", rv);
+                goto done;
+            }
+            while ((rv = sqlite3_step(stmt)) != SQLITE_DONE) {
+                if (SQLITE_ROW != rv) {
+                    fprintf(stderr, "sqlite3 failed to read unknown row: %d\n", rv);
+                    goto done;
+                }
+                const char *grp = sqlite3_column_text(stmt, 0);
+                const char *cnt = sqlite3_column_text(stmt, 1);
+                char *face = g_strdup_printf("face:///_unk_:%s (%s)", grp, cnt);
+                GFile *file = g_file_new_for_uri(face);
+                GFileInfo *info = g_file_info_new();
+                faces_file_source_update_file_info((GthFileSource*)state->ffs, file, info);
+                _dbg("faces: file_source(%d): fec callback for: %s\n", state->ffs->id, face);
+                state->fec(file, info, state->user);
+                g_object_unref(info);
+                g_object_unref(file);
+                g_free(face);
+            }
+        }
     }
 done:
     object_ready_with_error(state->ffs, state->ready, state->user, NULL);
@@ -388,18 +414,34 @@ static void faces_file_source_iterate_face(gpointer user) {
         goto done;
     }
     if (db) {
-        sqlite3_stmt *stmt;
-        int rv = sqlite3_prepare_v2(db,
+        char *qry_lab =
                         "SELECT DISTINCT(p.path) " \
                         "FROM face_groups as g " \
                         "INNER JOIN face_data as d ON g.grp = d.grp " \
                         "INNER JOIN file_paths as p ON p.hash = d.hash " \
-                        "WHERE g.label = ?1", -1, &stmt, NULL);
+                        "WHERE g.label = ?1";
+        char *qry_grp =
+                        "SELECT DISTINCT(p.path) " \
+                        "FROM face_data as d " \
+                        "INNER JOIN file_paths as p ON p.hash = d.hash " \
+                        "WHERE d.grp = ?1";
+        int grp;
+        char *qry = qry_lab;
+        if (sscanf(face, "_unk_:%d ", &grp) > 0) {
+            // unknown face label detected, use group query
+            qry = qry_grp;
+            _dbg("faces: file_source(%d): iterate face (%s): detected group: %d\n", state->ffs->id, uri, grp);
+        }
+        sqlite3_stmt *stmt;
+        int rv = sqlite3_prepare_v2(db, qry, -1, &stmt, NULL);
         if (rv != SQLITE_OK) {
             fprintf(stderr, "faces: iterate_face: prepare failed: %d\n", rv);
             goto done;
         }
-        rv = sqlite3_bind_text(stmt, 1, face, -1, SQLITE_STATIC);
+        if (qry == qry_lab)
+            rv = sqlite3_bind_text(stmt, 1, face, -1, SQLITE_STATIC);
+        else
+            rv = sqlite3_bind_int(stmt, 1, grp);
         if (SQLITE_OK != rv) {
             fprintf(stderr, "faces: sqlite_bind error: %d\n", rv);
         }
