@@ -627,10 +627,10 @@ static void cache_face(int l, int t, int r, int b, const char *n, const char *g,
 }
 // GLib signal handler, called when any viewer loads a file
 // We use this as a conveniant moment to query for image metadata
-static void faces_viewer_file_loaded(GthViewerPage *viewer, GthFileData *file, gboolean success, gpointer user) {
+static void faces_viewer_file_loaded(GthViewerPage *viewer, GthFileData *file, GFileInfo *info, gboolean success, gpointer user) {
     gchar *path = g_file_get_path(file->file);
     FaceCache *cache = (FaceCache *)user;
-    _dbg("faces: viewer_file_loaded(%s): %s\n", success ? "ok" : "fail", path);
+    _dbg("faces: viewer_file_loaded(%s): %s cache=%p\n", success ? "ok" : "fail", path, cache);
     if (success) {
         if (NULL != cache->path)
             g_free(cache->path);

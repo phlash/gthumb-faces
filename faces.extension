@@ -11,4 +11,4 @@ Category=Viewer
 [Loader]
 Type=module
 File=libfaces.so
-API=3.4
+API=API_VERSION

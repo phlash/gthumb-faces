@@ -2,7 +2,7 @@
 # - example uses autoconf/configure but appears completely busted so we ignore
 #   and use gthumb-dev package (thus pkg-config works). *sigh*
 
-GTHUMB_API_VERSION=3.4
+GTHUMB_API_VERSION=3.6
 CFLAGS=$(shell pkg-config --cflags gthumb-$(GTHUMB_API_VERSION) sqlite3) -I.
 LIBS=$(shell pkg-config --libs gthumb-$(GTHUMB_API_VERSION) sqlite3)
 TAG=$(shell git describe --dirty=-WIP --tags)
@@ -21,7 +21,7 @@ build/libfaces.so: build/faces.o
 	gcc -o $@ -shared -fPIC $< $(LIBS)
 
 build/faces.extension: faces.extension
-	sed -e "s/GIT_TAG/$(TAG)/" < $< > $@
+	sed -e "s/GIT_TAG/$(TAG)/" -e "s/API_VERSION/$(GTHUMB_API_VERSION)/" < $< > $@
 
 build/%.o: %.c
 	gcc -c -o $@ -fPIC $(CFLAGS) $<
