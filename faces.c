@@ -23,9 +23,11 @@
  *  Faces extension - marks up loaded image files with face rectangles
  *  stored in the configured 'faces_in_photos' SQLite database.
  *
- *  Currently this intercepts the loaders for MIME types image/jpeg and
- *  image/png, as there are no suitable hooks called from gThumb during
- *  image loading or rendering - oops.
+ *  This provides a new Tree object (file source) that lists known faces
+ *  and intercepts image rendering to draw markers on the displayed image.
+ *
+ *  Previously this intercepted the loaders for MIME types image/jpeg and
+ *  image/png, as I did not understand rendering hooks in gThumb.
  */
 
 #include <config.h>
