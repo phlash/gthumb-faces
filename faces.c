@@ -655,41 +655,68 @@ static void faces_viewer_file_loaded(GthViewerPage *viewer, GthFileData *file, G
 }
 
 // Scale and draw face metadata from the cache over the image
+static gboolean _draw_faces = TRUE;
 static void faces_paint_metadata(GthImageViewer *viewer, cairo_t *cr, gpointer user) {
-    FaceCache *cache = (FaceCache *)user;
-    double z = gth_image_viewer_get_zoom(viewer);
-    int orig_w, orig_h;
-    gth_image_viewer_get_original_size(viewer, &orig_w, &orig_h);
-    // We create a fresh context, as the provided one is oddly transformed
-    cairo_t *ourcr = cairo_create(cairo_get_target(cr));
-    // We calculate as follows:
+    // We calculate co-ordinates in drawing space as follows:
     //   image (left,top) = transform(cr, (image_offset) - (scroll_offset))
-    //   rect (l,t,r,b) = (face (l,t,r,b) * z) + image (left,top)
     double il = (double)(viewer->image_area.x - viewer->visible_area.x);
     double it = (double)(viewer->image_area.y - viewer->visible_area.y);
     cairo_user_to_device(cr, &il, &it);
-    FaceInfo *fi;
-    for (fi = cache->faces; fi != NULL; fi = fi->next) {
-        int l = (int)(((double)fi->l)*z + il);
-        int t = (int)(((double)fi->t)*z + it);
-        int r = (int)(((double)fi->r)*z + il);
-        int b = (int)(((double)fi->b)*z + it);
-        draw_to_context(ourcr, l, t, r, b, fi->n, fi->g, fi->p);
+    // We create a fresh context, as the provided one is oddly transformed
+    cairo_t *ourcr = cairo_create(cairo_get_target(cr));
+    if (_draw_faces) {
+        FaceCache *cache = (FaceCache *)user;
+        double z = gth_image_viewer_get_zoom(viewer);
+        FaceInfo *fi;
+        for (fi = cache->faces; fi != NULL; fi = fi->next) {
+            // rect (l,t,r,b) = (face (l,t,r,b) * z) + image (left,top)
+            int l = (int)(((double)fi->l)*z + il);
+            int t = (int)(((double)fi->t)*z + it);
+            int r = (int)(((double)fi->r)*z + il);
+            int b = (int)(((double)fi->b)*z + it);
+            draw_to_context(ourcr, l, t, r, b, fi->n, fi->g, fi->p);
+        }
+    } else {
+        // Mark corner to show faces are disabled
+        cairo_save(ourcr);
+        cairo_set_source_rgb(ourcr, 1.0, 0, 0);
+        cairo_set_line_width(ourcr, 2.0);
+        cairo_move_to(ourcr, il + 5, it + 15);
+        cairo_set_font_size(ourcr, 12);
+        cairo_set_line_width(ourcr, 1.0);
+        cairo_text_path(ourcr, "(faces off)");
+        cairo_stroke(ourcr);
+        cairo_restore(ourcr);
     }
     cairo_destroy(ourcr);
+}
+
+static GtkWidget *_viewer = NULL;
+static gpointer faces_keypress(GthBrowser *browser, GdkEventKey *ev) {
+    gboolean rv = FALSE;
+    if (GDK_KEY_F == ev->keyval) {
+        _draw_faces = !_draw_faces;
+        if (_viewer != NULL)
+            gtk_widget_queue_draw(_viewer);
+        rv = TRUE;
+    }
+    _dbg("faces_toggle_faces: state=%d, return=%d\n", _draw_faces, rv);
+    return GINT_TO_POINTER(rv);
 }
 
 static void faces_viewer_activated(GthBrowser *browser) {
     GthViewerPage *page = GTH_VIEWER_PAGE(gth_browser_get_viewer_page(browser));
     GType vtype = G_OBJECT_TYPE(page);
     // Check we can use the method in the extension to get to the GthImageViewer..
-    // If so: then connect to the file loaded signal for this page and add a paint
-    // handler to the GthImageViewer, both sharing a cache of face data.
     if (strcmp(g_type_name(vtype), "GthImageViewerPage") == 0) {
+        // If so: then connect to the file loaded signal for this page and add a paint
+        // handler to the GthImageViewer, both sharing a cache of face data.
         FaceCache *cache = calloc(1, sizeof(FaceCache));
         g_signal_connect(page, "file-loaded", G_CALLBACK(faces_viewer_file_loaded), cache);
-        GtkWidget *viewer = gth_image_viewer_page_get_image_viewer(page);
-        gth_image_viewer_add_painter(GTH_IMAGE_VIEWER(viewer), faces_paint_metadata, cache);
+        // Add our painting function to render face rectangles (if enabled)
+        // keep a reference to the widget to invalidate when toggling enable/disable faces
+        _viewer = gth_image_viewer_page_get_image_viewer(page);
+        gth_image_viewer_add_painter(GTH_IMAGE_VIEWER(_viewer), faces_paint_metadata, cache);
         _dbg("faces: viewer_activated: hooked page type: %s cache=%p\n", g_type_name(vtype), cache);
     }
 }
@@ -711,6 +738,8 @@ gthumb_extension_activate (void) {
         else
             fputs("faces: unable to intercept image/png loader\n", stderr);
     } else {
+        // Hook into processing when browser key press event isn't handled elsewhere
+        gth_hook_add_callback ("gth-browser-file-list-key-press", 10, G_CALLBACK (faces_keypress), NULL);
         // Hook into processing when browser viewer is activated
         gth_hook_add_callback("gth-browser-activate-viewer-page", 10, G_CALLBACK(faces_viewer_activated), NULL);
     }
