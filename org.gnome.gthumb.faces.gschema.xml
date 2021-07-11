@@ -5,6 +5,9 @@
     <key type="s" name="dbpath">
             <default>'/home/shared/photos/faces.db'</default>
     </key>
+    <key type="b" name="iterate-unknown">
+            <default>false</default>
+    </key>
   </schema>
   
 </schemalist>

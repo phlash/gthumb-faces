@@ -42,10 +42,14 @@
 // where we store our prefs (in dconf-editor)
 #define GTHUMB_FACES_SCHEMA GTHUMB_SCHEMA ".faces"
 #define PREF_FACES_DBPATH "dbpath"
+#define PREF_FACES_IUNKNOWN "iterate-unknown"
 
 // Database handle and default location
 static sqlite3 *db = NULL;
 static char *dbfile = "/home/shared/photos/faces.db";
+
+// Are we iterating unknown faces?
+static gboolean iterate_unk = FALSE;
 
 // local debug messages
 static void _dbg(const char *fmt, ...)
@@ -361,7 +365,11 @@ static void faces_file_source_iterate_faces(gpointer user) {
                 fprintf(stderr, "sqlite3 failed to read label row: %s\n", rv);
                 goto done;
             }
-            char *label = g_uri_escape_string(sqlite3_column_text(stmt, 0), "", FALSE);
+            // skip _unknown_ if we are adding these below
+            const char *name = sqlite3_column_text(stmt, 0);
+            if (iterate_unk && strcmp(name, "_unknown_")==0)
+                continue;
+            char *label = g_uri_escape_string(name, "", FALSE);
             char *face = g_strdup_printf("face:///%s", label);
             g_free(label);
             GFile *file = g_file_new_for_uri(face);
@@ -375,11 +383,12 @@ static void faces_file_source_iterate_faces(gpointer user) {
         }
         sqlite3_finalize(stmt);
         // special hack.. iterate _unknown_ faces by group id, in descending order of quantity
-        if (getenv("FACES_ITERATE_UNKNOWN") != NULL) {
+        if (iterate_unk) {
+            _dbg("faces: file_source(%d): iterating unknown groups\n", state->ffs->id);
             stmt = NULL;
             rv = sqlite3_prepare_v2(db,
-                "select g.grp, count(g.grp) " \
-                "from face_data as d inner join face_groups as g on d.grp=g.grp " \
+                "select g.grp, count(d.grp) as count " \
+                "from face_groups g inner join face_data d on d.grp=g.grp " \
                 "where g.label='_unknown_' group by g.grp order by count desc", -1, &stmt, NULL);
             if (SQLITE_OK != rv) {
                 fprintf(stderr, "sqlite3 failed to select unknown counts: %d\n", rv);
@@ -392,7 +401,7 @@ static void faces_file_source_iterate_faces(gpointer user) {
                 }
                 const char *grp = sqlite3_column_text(stmt, 0);
                 const char *cnt = sqlite3_column_text(stmt, 1);
-                char *face = g_strdup_printf("face:///_unk_:%s (%s)", grp, cnt);
+                char *face = g_strdup_printf("face:///_unknown_:%s", grp);
                 GFile *file = g_file_new_for_uri(face);
                 GFileInfo *info = g_file_info_new();
                 faces_file_source_update_file_info((GthFileSource*)state->ffs, file, info, cnt);
@@ -437,9 +446,9 @@ static void faces_file_source_iterate_face(gpointer user) {
                         "FROM face_data as d " \
                         "INNER JOIN file_paths as p ON p.hash = d.hash " \
                         "WHERE d.grp = ?1";
-        int grp;
+        int grp = -1;
         char *qry = qry_lab;
-        if (sscanf(face, "_unk_:%d ", &grp) > 0) {
+        if (sscanf(face, "_unknown_:%d", &grp) > 0) {
             // unknown face label detected, use group query
             qry = qry_grp;
             _dbg("faces: file_source(%d): iterate face (%s): detected group: %d\n", state->ffs->id, uri, grp);
@@ -450,7 +459,7 @@ static void faces_file_source_iterate_face(gpointer user) {
             fprintf(stderr, "faces: iterate_face: prepare failed: %d\n", rv);
             goto done;
         }
-        if (qry == qry_lab)
+        if (grp<0)
             rv = sqlite3_bind_text(stmt, 1, face, -1, SQLITE_STATIC);
         else
             rv = sqlite3_bind_int(stmt, 1, grp);
@@ -756,8 +765,9 @@ gthumb_extension_activate (void) {
     // Read our database path and open it
     GSettings *settings = g_settings_new(GTHUMB_FACES_SCHEMA);
     char *dbpath = g_settings_get_string(settings, PREF_FACES_DBPATH);
+    iterate_unk = g_settings_get_boolean(settings, PREF_FACES_IUNKNOWN);
     g_object_unref(settings);
-    _dbg("faces: org.gnome.gthumb.faces.dbpath=%s\n", dbpath);
+    _dbg("faces: org.gnome.gthumb.faces[.dbpath=%s][.iterate_unknown=%s]\n", dbpath, iterate_unk? "true" : "false");
     if (!dbpath || !dbpath[0])
         dbpath = dbfile;
     // save a copy of the path name
