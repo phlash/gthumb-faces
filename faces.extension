@@ -2,7 +2,7 @@
 Name=Faces
 Description=Display faces in photos.
 Authors=Phil Ashby
-Copyright=Copyright © Phil Ashby & (Ashbysoft *)
+Copyright=Copyright © Phil Ashby for (Ashbysoft *)
 Version=GIT_TAG
 URL=https://ashbysoft.com/wiki/Face%20Recognition
 Icon=file-catalog

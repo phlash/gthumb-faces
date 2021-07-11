@@ -254,7 +254,7 @@ static GFile *faces_file_source_to_gio_file(GthFileSource *fs, GFile *file) {
     _dbg("faces: file_source(%d): to_gio_file\n", ((FacesFileSource*)fs)->id);
     return g_file_dup(file);
 }
-static void faces_file_source_update_file_info(GthFileSource *fs, GFile *file, GFileInfo *info) {
+static void faces_file_source_update_file_info(GthFileSource *fs, GFile *file, GFileInfo *info, const char *count) {
     char *uri = g_file_get_uri(file);
     int n_face = is_face_uri(uri);
     g_file_info_set_file_type(info, G_FILE_TYPE_DIRECTORY);
@@ -273,7 +273,9 @@ static void faces_file_source_update_file_info(GthFileSource *fs, GFile *file, G
     if (0 == n_face) {
         name = g_strdup("Faces");
     } else if (n_face > 0) {
-        name = g_uri_unescape_string(uri+8, "");
+        char *tmp = g_uri_unescape_string(uri+8, "");
+        name = g_strdup_printf("%s (%s)", tmp, count);
+        g_free(tmp);
     } else {
         name = g_strdup("Unknown");
     }
@@ -302,7 +304,7 @@ static GFileInfo *faces_file_source_get_file_info(GthFileSource *fs, GFile *file
     _dbg("faces: file_source(%d): get_file_info (%s)\n", ((FacesFileSource*)fs)->id, uri);
     g_free(uri);
     GFileInfo *info = g_file_info_new();
-    faces_file_source_update_file_info(fs, file, info);
+    faces_file_source_update_file_info(fs, file, info, "0");
     return info;
 }
 static GthFileData *faces_file_source_get_file_data(GthFileSource *fs, GFile *file, GFileInfo *info) {
@@ -310,7 +312,7 @@ static GthFileData *faces_file_source_get_file_data(GthFileSource *fs, GFile *fi
     _dbg("faces: file_source(%d): get_file_data (%s)\n", ((FacesFileSource*)fs)->id, uri);
     g_free(uri);
     if (G_FILE_TYPE_DIRECTORY == g_file_info_get_file_type(info))
-        faces_file_source_update_file_info(fs, file, info);
+        faces_file_source_update_file_info(fs, file, info, "0");
     GthFileData *data = gth_file_data_new(file, info);
     return data;
 }
@@ -322,7 +324,7 @@ static void faces_file_source_read_metadata(GthFileSource *fs, GthFileData *fd, 
     char *uri = g_file_get_uri(fd->file);
     _dbg("faces: file_source(%d): read_metadata (%s)\n", ((FacesFileSource*)fs)->id, uri);
     g_free(uri);
-    faces_file_source_update_file_info(fs, fd->file, fd->info);
+    faces_file_source_update_file_info(fs, fd->file, fd->info, "0");
     object_ready_with_error(fs, ready, user, NULL);
 }
 static void faces_file_source_rename(GthFileSource *fs, GFile *file, const char *name, ReadyCallback ready, gpointer user) {
@@ -344,7 +346,12 @@ static void faces_file_source_iterate_faces(gpointer user) {
     // Iterate database and extract labels..
     if (db) {
         sqlite3_stmt *stmt;
-        int rv = sqlite3_prepare_v2(db, "SELECT label FROM face_labels", -1, &stmt, NULL);
+        // We count the number of faces associated to each label (approx number of files)
+        int rv = sqlite3_prepare_v2(db,
+            "SELECT g.label, count(d.grp) " \
+            "FROM face_groups g inner join face_data d on d.grp = g.grp " \
+            "group by g.label",
+            -1, &stmt, NULL);
         if (SQLITE_OK != rv) {
             fprintf(stderr, "sqlite3 failed to select labels: %d\n", rv);
             goto done;
@@ -359,7 +366,7 @@ static void faces_file_source_iterate_faces(gpointer user) {
             g_free(label);
             GFile *file = g_file_new_for_uri(face);
             GFileInfo *info = g_file_info_new();
-            faces_file_source_update_file_info((GthFileSource*)state->ffs, file, info);
+            faces_file_source_update_file_info((GthFileSource*)state->ffs, file, info, sqlite3_column_text(stmt, 1));
             _dbg("faces: file_source(%d): fec callback for: %s\n", state->ffs->id, face);
             state->fec(file, info, state->user);
             g_object_unref(info);
@@ -370,7 +377,10 @@ static void faces_file_source_iterate_faces(gpointer user) {
         // special hack.. iterate _unknown_ faces by group id, in descending order of quantity
         if (getenv("FACES_ITERATE_UNKNOWN") != NULL) {
             stmt = NULL;
-            rv = sqlite3_prepare_v2(db, "select g.grp, count(g.grp) as count from face_data as d, face_groups as g where d.grp=g.grp and g.label='_unknown_' group by g.grp order by count desc", -1, &stmt, NULL);
+            rv = sqlite3_prepare_v2(db,
+                "select g.grp, count(g.grp) " \
+                "from face_data as d inner join face_groups as g on d.grp=g.grp " \
+                "where g.label='_unknown_' group by g.grp order by count desc", -1, &stmt, NULL);
             if (SQLITE_OK != rv) {
                 fprintf(stderr, "sqlite3 failed to select unknown counts: %d\n", rv);
                 goto done;
@@ -385,7 +395,7 @@ static void faces_file_source_iterate_faces(gpointer user) {
                 char *face = g_strdup_printf("face:///_unk_:%s (%s)", grp, cnt);
                 GFile *file = g_file_new_for_uri(face);
                 GFileInfo *info = g_file_info_new();
-                faces_file_source_update_file_info((GthFileSource*)state->ffs, file, info);
+                faces_file_source_update_file_info((GthFileSource*)state->ffs, file, info, cnt);
                 _dbg("faces: file_source(%d): fec callback for: %s\n", state->ffs->id, face);
                 state->fec(file, info, state->user);
                 g_object_unref(info);
